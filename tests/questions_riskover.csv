@@ -1,0 +1,30 @@
+# Questions de test pour la base db/riskover.db. Separateur : point-virgule. Lignes # ignorees.
+# attendu = match  : le resultat de l'agent doit etre le meme que celui de sql_reference
+# attendu = absent : la base ne peut pas repondre : statut hors_base / valeur_absente / resultat vide
+# Plusieurs questions testent volontairement majuscules, minuscules et accents.
+id;question;attendu;sql_reference
+1;Combien de clients à SFAX ?;match;SELECT COUNT(*) FROM clients WHERE ville = 'Sfax'
+2;Quels clients sont dans le secteur sante ?;match;SELECT client_id FROM clients WHERE secteur = 'Santé'
+3;cli_009 : quel est son secteur et sa ville ?;match;SELECT secteur, ville FROM clients WHERE client_id = 'CLI_009'
+4;Liste des crédits EN RETARD avec leur montant;match;SELECT credit_id, montant FROM credits WHERE statut = 'En retard'
+5;Combien de crédits sont remboursés ?;match;SELECT COUNT(*) FROM credits WHERE statut = 'Remboursé'
+6;Montant total des crédits par type de crédit;match;SELECT type_credit, SUM(montant) FROM credits GROUP BY type_credit
+7;Quels covenants n'ont pas été respectés au deuxième trimestre 2025 ?;match;SELECT covenant_id FROM covenants WHERE respecte = 'Non' AND trimestre = '2025-T2'
+8;Quels clients ont un covenant dépassé au T2 2025 ?;match;SELECT DISTINCT cr.client_id FROM covenants cv JOIN credits cr ON cr.credit_id = cv.credit_id WHERE cv.respecte = 'Non' AND cv.trimestre = '2025-T2'
+9;Quel est le profil du client CLI_045 (secteur, tranche d'âge, ville) ?;match;SELECT secteur, tranche_age, ville FROM clients WHERE client_id = 'CLI_045'
+10;Quels sont les crédits du client cli_003 et leurs garanties ?;match;SELECT cr.credit_id, g.type_garantie FROM credits cr LEFT JOIN garanties g ON g.credit_id = cr.credit_id WHERE cr.client_id = 'CLI_003'
+11;Combien d'incidents de paiement non régularisés y a-t-il ?;match;SELECT COUNT(*) FROM incidents_paiement WHERE regularise = 'Non'
+12;Quelles entreprises de gabes sont des GRANDES ENTREPRISES ?;match;SELECT entreprise_id FROM entreprises WHERE ville = 'Gabès' AND taille = 'Grande entreprise'
+13;Nombre de clients par segment;match;SELECT segment, COUNT(*) FROM clients GROUP BY segment
+14;Quel crédit a le montant le plus élevé ?;match;SELECT credit_id, montant FROM credits WHERE montant = (SELECT MAX(montant) FROM credits)
+15;Quels documents ne sont liés à aucun client ?;match;SELECT doc_id FROM documents WHERE lie = 'Non'
+16;Quelle est la valeur totale des hypothèques ?;match;SELECT SUM(valeur) FROM garanties WHERE type_garantie = 'Hypothèque'
+17;Quels clients du secteur industrie ont un crédit en contentieux ?;match;SELECT DISTINCT c.client_id FROM clients c JOIN credits cr ON cr.client_id = c.client_id WHERE c.secteur = 'Industrie' AND cr.statut = 'Contentieux'
+18;Quels documents (identifiant et nom de fichier) existent pour le client CLI_014 ?;match;SELECT doc_id, nom_fichier FROM documents WHERE client_id = 'CLI_014'
+19;Quel est le retard maximum en jours sur un incident de paiement ?;match;SELECT MAX(jours_retard) FROM incidents_paiement
+20;Quelle est la raison sociale de l'entreprise du client CLI_005 ?;match;SELECT e.raison_sociale FROM clients c JOIN entreprises e ON e.entreprise_id = c.entreprise_id WHERE c.client_id = 'CLI_005'
+21;Quels clients habitent à Casablanca ?;absent;
+22;Quel est le chiffre d'affaires des entreprises ?;absent;
+23;Quels clients travaillent dans le secteur spatial ?;absent;
+24;Quel est le salaire des clients ?;absent;
+25;Bonjour, ça va ?;absent;

@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Bases SQLite generees (se recreent avec les scripts create_*.py)
+db/*.db
+db/*.db-journal
+
+# Cache des embeddings bge-m3 (recalcule automatiquement, ~11 Mo)
+data/cache/
+
+# Journal d'audit local (peut contenir des questions d'analystes)
+logs/*.log
+
+# Donnees brutes / nettoyees : jamais de vraies donnees sur GitHub
+data/raw/*
+data/clean/*
+!data/raw/.gitkeep
+!data/clean/.gitkeep
+
+# Documents du projet tutore (confidentiels, RisKover) : jamais sur GitHub
+*.docx
+*.doc
+*.pdf
+projet_tutore*
+
+# Editeurs / systeme
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

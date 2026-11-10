@@ -1,0 +1,6 @@
+﻿modele;linking;id;categorie;question;attendu;verdict;statut;tables_ok;tables_selectionnees;valeurs_trouvees;prompt_tokens;sql_agent;sql_reference;lignes_attendues;lignes_obtenues;essais;temps_s
+qwen2.5-coder:14b;on;3;libelle;Combien de crédits sont en contentieux ?;match;MATCH;ok;oui;REF_STATUT_DOSSIER,CRD_DOSSIER,CRD_COVENANT,CRD_IMPAYE,CRD_ECHEANCE,STG_CRD_DOSSIER;REF_STATUT_DOSSIER.LB_STAT='Contentieux';1711;"SELECT COUNT(d.ID_DOS) AS nb_credits_contentieux 
+FROM CRD_DOSSIER AS d 
+JOIN REF_STATUT_DOSSIER AS s ON s.CD_STAT = d.CD_STAT 
+WHERE norm(s.LB_STAT) = norm('Contentieux') LIMIT 200";SELECT COUNT(*) FROM CRD_DOSSIER WHERE CD_STAT = 'CTX';1;1;1;8.6
+qwen2.5-coder:14b;on;7;valeur;Combien de clients sont domiciliés à Sfax Médina ?;match;MATCH;ok;oui;REF_LOCALITE,TIE_ENTREPRISE,TIE_PERSONNE,CTB_IMMOBILISATION,CRD_DOSSIER,TRE_PLACEMENT;REF_LOCALITE.LB_LOC='Sfax Médina';2135;SELECT COUNT(t.ID_TIERS) AS nb_clients FROM TIE_PERSONNE AS t JOIN REF_LOCALITE AS r ON r.CD_LOC = t.CD_LOC WHERE norm(r.LB_LOC) = norm('Sfax Médina') LIMIT 200;SELECT COUNT(*) FROM TIE_PERSONNE p JOIN REF_LOCALITE l ON l.CD_LOC = p.CD_LOC WHERE l.LB_LOC = 'Sfax Médina';1;1;1;3.2

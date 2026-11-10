@@ -1,0 +1,31 @@
+# Questions de test pour la GRANDE base db/banque_large.db (100 tables). Separateur : point-virgule.
+# attendu = match  : le resultat de l'agent doit etre le meme que celui de sql_reference
+# attendu = absent : la base ne peut pas repondre (hors_base / valeur_absente / resultat vide)
+# categorie : simple, libelle (jointure vers une table REF_), valeur (localite / raison sociale),
+#             faute (faute de frappe), multi (3 tables ou plus), agregat, piege
+id;categorie;question;attendu;sql_reference
+1;simple;Combien de dossiers de crédit y a-t-il ?;match;SELECT COUNT(*) FROM CRD_DOSSIER
+2;simple;Combien de clients sont des personnes morales ?;match;SELECT COUNT(*) FROM TIE_PERSONNE WHERE CD_TYPE_TIERS = 'PM'
+3;libelle;Combien de crédits sont en contentieux ?;match;SELECT COUNT(*) FROM CRD_DOSSIER WHERE CD_STAT = 'CTX'
+4;libelle;Montant total accordé en leasing;match;SELECT SUM(MT_ACC) FROM CRD_DOSSIER WHERE CD_PROD = 'LS'
+5;libelle;Nombre de crédits par statut (libellé du statut);match;SELECT s.LB_STAT, COUNT(*) FROM CRD_DOSSIER d JOIN REF_STATUT_DOSSIER s ON s.CD_STAT = d.CD_STAT GROUP BY s.LB_STAT
+6;libelle;Combien de garanties de type hypothèque ?;match;SELECT COUNT(*) FROM CRD_GARANTIE WHERE CD_TYPE_GAR = 'HYP'
+7;valeur;Combien de clients sont domiciliés à Sfax Médina ?;match;SELECT COUNT(*) FROM TIE_PERSONNE p JOIN REF_LOCALITE l ON l.CD_LOC = p.CD_LOC WHERE l.LB_LOC = 'Sfax Médina'
+8;valeur;Combien de salariés a l'entreprise Atlas Négoce Tunisie ?;match;SELECT NB_EFFECTIF FROM TIE_ENTREPRISE WHERE LB_RAISON_SOC = 'Atlas Négoce Tunisie'
+9;valeur;Quels dossiers de crédit a l'entreprise carthage automobiles international ?;match;SELECT d.ID_DOS FROM CRD_DOSSIER d JOIN TIE_ENTREPRISE e ON e.ID_TIERS = d.ID_TIERS WHERE e.LB_RAISON_SOC = 'Carthage Automobiles International'
+10;valeur;Combien de clients gère l'agence Agence Sousse Centre ?;match;SELECT COUNT(*) FROM TIE_PERSONNE p JOIN REF_AGENCE a ON a.CD_AGC = p.CD_AGC WHERE a.LB_AGC = 'Agence Sousse Centre'
+11;faute;combien de credits en contentieu ?;match;SELECT COUNT(*) FROM CRD_DOSSIER WHERE CD_STAT = 'CTX'
+12;faute;nombre de clients a GABES CENTRE;match;SELECT COUNT(*) FROM TIE_PERSONNE p JOIN REF_LOCALITE l ON l.CD_LOC = p.CD_LOC WHERE l.LB_LOC = 'Gabès Centre'
+13;faute;montant total des credits immobiliers;match;SELECT SUM(MT_ACC) FROM CRD_DOSSIER WHERE CD_PROD = 'CI'
+14;multi;Combien de clients du gouvernorat de Sfax ont un crédit en retard ?;match;SELECT COUNT(DISTINCT p.ID_TIERS) FROM TIE_PERSONNE p JOIN REF_LOCALITE l ON l.CD_LOC = p.CD_LOC JOIN REF_GOUVERNORAT g ON g.CD_GOUV = l.CD_GOUV JOIN CRD_DOSSIER d ON d.ID_TIERS = p.ID_TIERS WHERE g.LB_GOUV = 'Sfax' AND d.CD_STAT = 'RET'
+15;multi;Combien de clients du secteur Tourisme et hôtellerie ont un covenant non respecté au trimestre 2025-T2 ?;match;SELECT COUNT(DISTINCT p.ID_TIERS) FROM TIE_PERSONNE p JOIN CRD_DOSSIER d ON d.ID_TIERS = p.ID_TIERS JOIN CRD_COVENANT c ON c.ID_DOS = d.ID_DOS WHERE p.CD_SECT = 'TOU' AND c.FL_RESP = 'N' AND c.CD_TRIM = '2025-T2'
+16;multi;Montant total impayé non régularisé pour les crédits de trésorerie;match;SELECT SUM(i.MT_IMP) FROM CRD_IMPAYE i JOIN CRD_DOSSIER d ON d.ID_DOS = i.ID_DOS WHERE d.CD_PROD = 'CT' AND i.FL_REGUL = 'N'
+17;multi;Quelles entreprises de plus de 1000 salariés ont un crédit en contentieux ? Donne la raison sociale.;match;SELECT DISTINCT e.LB_RAISON_SOC FROM TIE_ENTREPRISE e JOIN CRD_DOSSIER d ON d.ID_TIERS = e.ID_TIERS WHERE e.NB_EFFECTIF > 1000 AND d.CD_STAT = 'CTX'
+18;agregat;Montant moyen accordé par produit de crédit (libellé du produit);match;SELECT p.LB_PROD, AVG(d.MT_ACC) FROM CRD_DOSSIER d JOIN REF_PRODUIT_CRD p ON p.CD_PROD = d.CD_PROD GROUP BY p.LB_PROD
+19;agregat;Quel est le nombre maximum de jours de retard d'un impayé ?;match;SELECT MAX(NB_JR_RET) FROM CRD_IMPAYE
+20;agregat;Combien de comptes en euros sont actifs ?;match;SELECT COUNT(*) FROM CPT_COMPTE WHERE CD_DEVISE = 'EUR' AND CD_ETAT = 'ACT'
+21;agregat;Nombre de crédits accordés en 2024;match;SELECT COUNT(*) FROM CRD_DOSSIER WHERE DT_OCT LIKE '2024%'
+22;piege;Quel est le chiffre d'affaires des entreprises clientes ?;absent;
+23;piege;Combien de clients habitent à Casablanca ?;absent;
+24;piege;Quelle est la note de crédit (rating) des clients ?;absent;
+25;piege;Quel est le salaire moyen des clients particuliers ?;absent;
