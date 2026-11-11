@@ -48,7 +48,10 @@ ANSWER_MODEL = config.MODEL_NAME
 DB_PATH = Path(config.RISKOVER_DB_PATH)
 LOG_FILE = Path(config.QUERY_LOG_PATH)
 
-MAX_ROWS = 200
+# Limites (modifiables dans config.py, par variable d'environnement ou par option --limit / --show)
+MAX_ROWS = config.MAX_ROWS            # lignes max renvoyees par la base (LIMIT ajoute au SQL)
+SHOW_ROWS = config.SHOW_ROWS          # lignes affichees a l'ecran
+ANSWER_ROWS = config.ANSWER_ROWS      # lignes donnees au modele qui redige la reponse
 MAX_RETRIES = 2
 HORS_BASE = "HORS_BASE"
 
@@ -138,11 +141,13 @@ def build_prompt(question: str, mschema: str, dialect: str = "SQLite",
                  + "\n".join(f"- {v['table']}.{v['colonne']} = '{v['valeur']}'  "
                              f"(question : « {v['texte_question']} »)" for v in values)
                  + "\n\n")
+    rules = RULES.replace("LIMIT 200", f"LIMIT {MAX_ROWS}")
+    examples = EXAMPLES.replace("LIMIT 200", f"LIMIT {MAX_ROWS}")
     return (
         f"Tu es un expert {dialect}. Lis le schéma de la base (format M-Schema) puis écris "
         f"UNE requête {dialect} qui répond à la question de l'analyste.\n"
         "Réponds uniquement avec la requête dans un bloc ```sql```, sans explication.\n\n"
-        f"【Règles】\n{RULES}\n"
+        f"【Règles】\n{rules}\n"
         "- norm() est une fonction disponible dans la base : minuscules + sans accents. "
         "Utilise-la seulement pour COMPARER (WHERE, ON, HAVING), jamais sur les colonnes "
         "affichées après SELECT : les valeurs doivent rester telles qu'en base.\n"
@@ -150,7 +155,7 @@ def build_prompt(question: str, mschema: str, dialect: str = "SQLite",
         "- Pour « le plus / le moins », renvoie toutes les égalités (sous-requête MAX/MIN), "
         "pas LIMIT 1.\n"
         "- Les dates sont du texte AAAA-MM-JJ ; utilise strftime() ou des comparaisons de texte.\n\n"
-        f"【Exemples】\n{EXAMPLES}\n\n"
+        f"【Exemples】\n{examples}\n\n"
         f"【Schéma de la base】\n{mschema}\n\n"
         f"{found}"
         f"【Question】\n{question}\n"
@@ -200,8 +205,10 @@ def validate_sql(sql: str) -> Tuple[bool, str]:
     return True, ""
 
 
-def enforce_limit(sql: str, max_rows: int = MAX_ROWS) -> str:
-    """Regle 6 : LIMIT final ajoute s'il manque, ramene a max_rows s'il est plus grand."""
+def enforce_limit(sql: str, max_rows: Optional[int] = None) -> str:
+    """Regle 6 : LIMIT final ajoute s'il manque, ramene a max_rows s'il est plus grand.
+    Un LIMIT plus petit ecrit par le modele (ex. « les 5 premiers » -> LIMIT 5) est garde."""
+    max_rows = max_rows or MAX_ROWS
     m = re.search(r"\blimit\s+(\d+)(\s+offset\s+\d+)?\s*$", _mask_strings(sql), flags=re.I)
     if not m:
         return f"{sql} LIMIT {max_rows}"
@@ -476,9 +483,14 @@ def solve(question: str, model: str = None, db_path: Path = None,
         return res
 
     log(f"[SQL execute] {res['sql']}")
-    log(f"[Resultat] {res['cols']} -> {len(res['rows'])} ligne(s)")
-    for row in res["rows"][:10]:
+    n = len(res["rows"])
+    log(f"[Resultat] {res['cols']} -> {n} ligne(s)"
+        + (f"  (limite atteinte : {MAX_ROWS}, utilise --limit pour en voir plus)"
+           if n >= MAX_ROWS else ""))
+    for row in res["rows"][:SHOW_ROWS]:
         log("   ", row)
+    if n > SHOW_ROWS:
+        log(f"    ... {n - SHOW_ROWS} autre(s) ligne(s) non affichee(s) (option --show)")
 
     if with_answer:
         res["answer"] = write_answer(question, res, llm)
@@ -495,7 +507,19 @@ def write_answer(question: str, res: Dict, llm=None) -> str:
             "Ne propose jamais d'exécuter du SQL."},
         {"role": "user", "content":
             f"Question : {question}\nRequête : {res['sql']}\n"
-            f"Colonnes : {res['cols']}\nRésultat : {res['rows'][:50]}"}])
+            f"Colonnes : {res['cols']}\nNombre total de lignes : {len(res['rows'])}\n"
+            f"Résultat : {res['rows'][:ANSWER_ROWS]}"}])
+
+
+def set_limits(max_rows: Optional[int] = None, show_rows: Optional[int] = None) -> None:
+    """Change les limites pour toute la session (utilise par --limit / --show)."""
+    global MAX_ROWS, SHOW_ROWS
+    if max_rows:
+        if max_rows < 1:
+            raise SystemExit("--limit doit etre >= 1")
+        MAX_ROWS = max_rows
+    if show_rows is not None:
+        SHOW_ROWS = max(0, show_rows)
 
 
 def main():
@@ -508,11 +532,17 @@ def main():
     p.add_argument("--db", default=str(DB_PATH), help="Base SQLite a interroger")
     p.add_argument("--linking", choices=["auto", "on", "off"], default="auto",
                    help="Schema linking (auto : active pour les grandes bases)")
+    p.add_argument("--limit", type=int, default=MAX_ROWS,
+                   help=f"Lignes max renvoyees par la base (defaut {MAX_ROWS})")
+    p.add_argument("--show", type=int, default=SHOW_ROWS,
+                   help=f"Lignes affichees a l'ecran (defaut {SHOW_ROWS})")
     args = p.parse_args()
+    set_limits(args.limit, args.show)
     db = Path(args.db)
     linking = {"auto": None, "on": True, "off": False}[args.linking]
 
-    print(f"Modele SQL : {args.model} | Modele reponse : {ANSWER_MODEL} | Base : {db}")
+    print(f"Modele SQL : {args.model} | Modele reponse : {ANSWER_MODEL} | Base : {db} | "
+          f"Limite : {MAX_ROWS} lignes (affichees : {SHOW_ROWS})")
     questions = [args.question] if args.question else iter(
         lambda: input("\nQuestion (vide pour quitter) : ").strip(), "")
     for q in questions:

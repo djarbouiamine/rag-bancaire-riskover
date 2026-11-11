@@ -10,7 +10,7 @@ Projet tutoré INDP3 - SIA (SUP'COM × RisKover) : agent IA d'aide à la décisi
 
 ## Architecture
 
-- **PC Windows** : code Python, base SQLite de test `db/riskover.db`, journal `logs/queries.log`.
+- **PC Windows** : code Python, base SQLite de test `db/banque_large.db` (par défaut), journal `logs/queries.log`.
 - **Serveur GPU SUP'COM** : modèles servis par **Ollama**, joints par un **tunnel SSH** sur `http://localhost:11435`.
 
 | Rôle | Modèle | Variable |
@@ -27,7 +27,9 @@ rag_bancaire/
 ├── config.py                    # Réglages : chemins, URL Ollama, noms des modèles
 ├── requirements.txt             # Dépendances Python
 ├── db/
-│   └── riskover.db              # Base de test (7 tables, données fictives)
+│   ├── banque_large.db          # Base PAR DÉFAUT (100 tables, 425 000 lignes, fictive)
+│   ├── banque_large.docs.json   # Dictionnaire de données de la grande base
+│   └── riskover.db              # Petite base (7 tables, fictive)
 ├── logs/
 │   └── queries.log              # Journal d'audit de toutes les requêtes SQL
 ├── src/
@@ -61,17 +63,20 @@ pip install -r requirements.txt
 
 **Fenêtre 1 - tunnel SSH** (à laisser ouverte) :
 ```powershell
-ssh -N -L 11435:127.0.0.1:11434 <utilisateur>@<adresse-serveur>
+ssh -N -o ServerAliveInterval=60 -L 11435:127.0.0.1:11434 <utilisateur>@<adresse-serveur>
 ```
 
-**Fenêtre 2 - projet** :
+**Fenêtre 2 - projet** (base par défaut : `banque_large.db`, modèle : `qwen2.5-coder:14b`,
+schema linking activé automatiquement) :
 ```powershell
-python src/create_riskover_db.py                      # une seule fois (--force pour recréer)
-python -m unittest tests.test_text2sql -v             # tests sans serveur
-python src/text2sql.py "Combien de clients à SFAX ?"  # une question
+python src/create_large_db.py                         # une seule fois (--force pour recréer)
+python -m unittest discover -s tests -v               # tests sans serveur
 python src/text2sql.py                                # mode interactif
-python src/bench_text2sql.py --models qwen2.5-coder:14b qwen3:14b gpt-oss:latest
+python src/text2sql.py "combien de credits en contentieu a sfax medina ?"
+python src/bench_text2sql.py                          # 25 questions de la grande base
 ```
+
+Petite base (7 tables) : ajouter `--db db/riskover.db` (créée par `python src/create_riskover_db.py`).
 
 ---
 
@@ -85,9 +90,8 @@ acceptés). Activé automatiquement à partir de 20 tables (`LINKING_MIN_TABLES`
 ```powershell
 python src/create_large_db.py                 # base de test : 100 tables, 425 000 lignes
 python src/schema_linking.py "credits en contentieu a sfax medina"
-python src/text2sql.py --db db/banque_large.db "combien de credits en contentieu a sfax medina ?"
-python src/bench_text2sql.py --db db/banque_large.db --file tests/questions_large.csv `
-       --models qwen2.5-coder:14b --linking off on
+python src/text2sql.py "combien de credits en contentieu a sfax medina ?"
+python src/bench_text2sql.py --models qwen2.5-coder:14b --linking off on   # avec vs sans linking
 ```
 
 Résultats (10/11/2026, 25 questions, base de 100 tables) :

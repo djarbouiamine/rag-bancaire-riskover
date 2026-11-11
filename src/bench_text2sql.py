@@ -28,7 +28,11 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import src.text2sql as t2s
 
-DEFAULT_FILE = t2s.BASE_DIR / "tests" / "questions_riskover.csv"
+# Fichier de questions par defaut selon la base choisie
+QUESTION_FILES = {
+    "banque_large": t2s.BASE_DIR / "tests" / "questions_large.csv",
+    "riskover": t2s.BASE_DIR / "tests" / "questions_riskover.csv",
+}
 
 
 def load_questions(path: Path):
@@ -43,15 +47,44 @@ def norm_rows(rows):
     return sorted(tuple(cell(x) for x in r) for r in rows)
 
 
+def cell_eq(a, b) -> bool:
+    """Egalite de deux cellules. Nombres : tolerance d'arrondi (11.43 ~ 11.4 ~ 11.428)."""
+    try:
+        fa, fb = float(a), float(b)
+    except (TypeError, ValueError):
+        return str(a) == str(b)
+    return abs(fa - fb) <= max(0.051, 1e-4 * abs(fb))
+
+
+def row_covers(ref_row, got_row) -> bool:
+    """Chaque cellule de la ligne de reference se retrouve dans la ligne de l'agent."""
+    used = set()
+    for r in ref_row:
+        j = next((j for j, g in enumerate(got_row) if j not in used and cell_eq(r, g)), None)
+        if j is None:
+            return False
+        used.add(j)
+    return True
+
+
 def compare(ref, got):
     if norm_rows(ref) == norm_rows(got):
         return "MATCH"
-    # memes lignes, l'agent a renvoye des colonnes en plus : accepte
-    if len(ref) == len(got):
-        nref, ngot = norm_rows(ref), norm_rows(got)
-        if all(any(set(r) <= set(g) for g in ngot) for r in nref):
-            return "MATCH (colonnes en plus)"
-    return "DIFFERENT"
+    if len(ref) != len(got):
+        return "DIFFERENT"
+    free = list(range(len(got)))
+    for r in ref:
+        j = next((j for j in free if row_covers(r, got[j])), None)
+        if j is None:
+            return "DIFFERENT"
+        free.remove(j)
+    same_width = all(len(r) == len(g) for r, g in zip(ref, got))
+    return "MATCH (arrondi)" if same_width else "MATCH (colonnes en plus)"
+
+
+def says_nothing(rows) -> bool:
+    """Resultat vide, ou une seule ligne de 0 / NULL (ex. COUNT(*) = 0) : « rien trouve »."""
+    return not rows or (len(rows) == 1 and all(v in (0, None) for v in rows[0]))
 
 
 def ref_tables(sql: str):
@@ -63,14 +96,23 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--models", nargs="+", default=[t2s.SQL_MODEL])
     p.add_argument("--db", default=str(t2s.DB_PATH))
-    p.add_argument("--file", default=str(DEFAULT_FILE))
+    p.add_argument("--file", default=None,
+                   help="Questions (par defaut : celles de la base choisie)")
     p.add_argument("--linking", nargs="+", choices=["auto", "on", "off"], default=["auto"],
                    help="Un ou plusieurs modes a comparer, ex. --linking off on")
     p.add_argument("--only", nargs="+")
+    p.add_argument("--limit", type=int, default=t2s.MAX_ROWS,
+                   help=f"Lignes max renvoyees par la base (defaut {t2s.MAX_ROWS})")
     args = p.parse_args()
+    t2s.set_limits(args.limit)
 
     db = Path(args.db)
-    questions = load_questions(Path(args.file))
+    qfile = Path(args.file) if args.file else QUESTION_FILES.get(
+        db.stem, QUESTION_FILES["riskover"])
+    if not db.exists():
+        script = "create_large_db.py" if db.stem == "banque_large" else "create_riskover_db.py"
+        raise SystemExit(f"Base introuvable : {db}. Lance d'abord : python src/{script}")
+    questions = load_questions(qfile)
     if args.only:
         questions = [q for q in questions if q["id"] in args.only]
 
@@ -84,7 +126,7 @@ def main():
     summary = {}
     by_cat = defaultdict(lambda: [0, 0])
 
-    print(f"Base : {db} | Questions : {len(questions)}")
+    print(f"Base : {db} | Questions : {len(questions)} ({qfile.name})")
     with open(out_file, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.DictWriter(f, fieldnames=fields, delimiter=";")
         w.writeheader()
@@ -118,7 +160,8 @@ def main():
                     else:
                         verdict = "OK (refuse d'inventer)" if (
                             res["status"] in ("hors_base", "valeur_absente")
-                            or (res["status"] == "ok" and not res["rows"])) else "A VERIFIER"
+                            or (res["status"] == "ok" and says_nothing(res["rows"]))) \
+                            else "A VERIFIER (a-t-il invente ?)"
                     good = verdict.startswith(("MATCH", "OK"))
                     ok += good
                     cat = q.get("categorie") or "-"

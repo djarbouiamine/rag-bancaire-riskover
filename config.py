@@ -9,9 +9,19 @@ import os
 # Chemins de base du projet
 BASE_DIR = Path(__file__).resolve().parent
 
-# Base RisKover de test (7 tables reliees, donnees fictives), utilisee par src/text2sql.py
+# Bases de test (donnees fictives)
 DB_DIR = BASE_DIR / "db"
-RISKOVER_DB_PATH = Path(os.getenv("RISKOVER_DB_PATH", DB_DIR / "riskover.db"))
+SMALL_DB_PATH = DB_DIR / "riskover.db"        # 7 tables     (python src/create_riskover_db.py)
+LARGE_DB_PATH = DB_DIR / "banque_large.db"    # 100 tables   (python src/create_large_db.py)
+
+# Base utilisee par defaut par text2sql.py et bench_text2sql.py : la GRANDE base.
+# Pour revenir a la petite : $env:RISKOVER_DB_PATH = "db/riskover.db"  (ou --db db/riskover.db)
+RISKOVER_DB_PATH = Path(os.getenv("RISKOVER_DB_PATH", LARGE_DB_PATH))
+
+# Limites de lignes (modifiables aussi avec --limit et --show)
+MAX_ROWS = int(os.getenv("MAX_ROWS", "200"))      # lignes max renvoyees par la base (LIMIT)
+SHOW_ROWS = int(os.getenv("SHOW_ROWS", "10"))     # lignes affichees a l'ecran
+ANSWER_ROWS = int(os.getenv("ANSWER_ROWS", "50"))  # lignes donnees au modele qui redige la reponse
 
 # Logs
 LOGS_DIR = BASE_DIR / "logs"
