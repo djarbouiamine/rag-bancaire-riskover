@@ -5,14 +5,12 @@ Pour chaque question : l'agent (text2sql.solve) repond, la requete de reference 
 la verite, et on compare les resultats (pas le texte SQL).
 
 Usage (depuis rag_bancaire) :
-    # petite base (7 tables)
+    python src/bench_text2sql.py                                   # 25 questions, riskover.db
+    python src/bench_text2sql.py --file tests/questions_joins.csv  # 15 questions avec jointures
     python src/bench_text2sql.py --models qwen2.5-coder:14b qwen3:14b gpt-oss:latest
-
-    # grande base (100 tables) : sans puis avec schema linking
-    python src/bench_text2sql.py --db db/banque_large.db --file tests/questions_large.csv ^
-        --models qwen2.5-coder:14b --linking off on
-
+    python src/bench_text2sql.py --linking off on                  # sans puis avec schema linking
     python src/bench_text2sql.py --only 3 8 17
+    python src/bench_text2sql.py --db autre_base.db --file mes_questions.csv
 """
 import argparse
 import csv
@@ -28,11 +26,7 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import src.text2sql as t2s
 
-# Fichier de questions par defaut selon la base choisie
-QUESTION_FILES = {
-    "banque_large": t2s.BASE_DIR / "tests" / "questions_large.csv",
-    "riskover": t2s.BASE_DIR / "tests" / "questions_riskover.csv",
-}
+DEFAULT_FILE = t2s.BASE_DIR / "tests" / "questions_riskover.csv"
 
 
 def load_questions(path: Path):
@@ -107,11 +101,10 @@ def main():
     t2s.set_limits(args.limit)
 
     db = Path(args.db)
-    qfile = Path(args.file) if args.file else QUESTION_FILES.get(
-        db.stem, QUESTION_FILES["riskover"])
+    qfile = Path(args.file) if args.file else DEFAULT_FILE
     if not db.exists():
-        script = "create_large_db.py" if db.stem == "banque_large" else "create_riskover_db.py"
-        raise SystemExit(f"Base introuvable : {db}. Lance d'abord : python src/{script}")
+        raise SystemExit(f"Base introuvable : {db}. "
+                         "Pour la base RisKover, lance d'abord : python src/create_riskover_db.py")
     questions = load_questions(qfile)
     if args.only:
         questions = [q for q in questions if q["id"] in args.only]

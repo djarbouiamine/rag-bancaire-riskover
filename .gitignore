@@ -4,21 +4,19 @@ __pycache__/
 .venv/
 venv/
 
-# Bases SQLite generees (se recreent avec les scripts create_*.py)
+# Base SQLite generee (se recree avec : python src/create_riskover_db.py)
 db/*.db
 db/*.db-journal
 
-# Cache des embeddings bge-m3 (recalcule automatiquement, ~11 Mo)
-data/cache/
+# Cache des embeddings bge-m3 (recalcule automatiquement)
+data/
 
 # Journal d'audit local (peut contenir des questions d'analystes)
-logs/*.log
+logs/
 
-# Donnees brutes / nettoyees : jamais de vraies donnees sur GitHub
-data/raw/*
-data/clean/*
-!data/raw/.gitkeep
-!data/clean/.gitkeep
+# Questions enregistrees avec compare_sql.py et resultats de benchmark (locaux)
+tests/mes_questions.csv
+benchmark_results/
 
 # Documents du projet tutore (confidentiels, RisKover) : jamais sur GitHub
 *.docx

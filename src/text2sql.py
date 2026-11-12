@@ -1,5 +1,10 @@
 """
-text2sql.py - Outil text-to-SQL de l'agent RisKover (question en francais -> SELECT -> resultat).
+text2sql.py - Outil text-to-SQL (question en francais -> SELECT -> resultat).
+
+Fonctionne avec N'IMPORTE QUELLE base SQLite (--db chemin/base.db) : le schema, les
+cles etrangeres et les valeurs possibles sont lus automatiquement. Un dictionnaire de
+donnees optionnel <base>.docs.json ameliore les resultats quand les noms de colonnes sont
+codes (voir README, section « Utiliser une autre base »).
 
 Chaine :
   question -> prompt (regles + M-Schema) -> LLM (Ollama) -> requete SQL
@@ -52,7 +57,7 @@ LOG_FILE = Path(config.QUERY_LOG_PATH)
 MAX_ROWS = config.MAX_ROWS            # lignes max renvoyees par la base (LIMIT ajoute au SQL)
 SHOW_ROWS = config.SHOW_ROWS          # lignes affichees a l'ecran
 ANSWER_ROWS = config.ANSWER_ROWS      # lignes donnees au modele qui redige la reponse
-MAX_RETRIES = 2
+MAX_RETRIES = 3        # corrections possibles apres la 1re requete (erreur, jointure, valeur...)
 HORS_BASE = "HORS_BASE"
 
 # Tables que le modele a le droit de lire (None = toutes les tables de la base)
@@ -152,6 +157,16 @@ def build_prompt(question: str, mschema: str, dialect: str = "SQLite",
         "Utilise-la seulement pour COMPARER (WHERE, ON, HAVING), jamais sur les colonnes "
         "affichées après SELECT : les valeurs doivent rester telles qu'en base.\n"
         "- Ajoute seulement les filtres demandés dans la question, n'en invente pas.\n"
+        "- Quand tu listes des entités (clients, entreprises...) après une jointure, utilise "
+        "SELECT DISTINCT pour ne pas les répéter.\n"
+        "- « aucun », « sans », « non lié », « vide » sur une colonne : utilise IS NULL "
+        "(pas = '').\n"
+        "- « jamais », « aucun(e) » portant sur une AUTRE table (ex. clients sans incident) : "
+        "utilise NOT EXISTS (SELECT 1 FROM ... WHERE ...), pas LEFT JOIN ... IS NULL.\n"
+        "- Dans les regroupements et les sous-requêtes MAX/MIN, exclus les lignes où la clé "
+        "de regroupement est NULL (WHERE colonne IS NOT NULL).\n"
+        "- Si la mesure demandée (chiffre d'affaires, salaire, note...) n'est pas une colonne "
+        "du schéma, réponds HORS_BASE : ne la remplace jamais par une autre mesure.\n"
         "- Pour « le plus / le moins », renvoie toutes les égalités (sous-requête MAX/MIN), "
         "pas LIMIT 1.\n"
         "- Les dates sont du texte AAAA-MM-JJ ; utilise strftime() ou des comparaisons de texte.\n\n"
@@ -262,7 +277,117 @@ def apply_norm(sql: str, text_columns) -> str:
                  + _STRING + r")*)\s*\)",
                  lambda m: f"{m.group(1)} {m.group(2).upper()} ({wrap_list(m.group(3))})",
                  sql, flags=re.I)
+    return fix_empty_values(sql)
+
+
+def fix_empty_values(sql: str) -> str:
+    """« aucun / sans / vide » : le modele ecrit souvent col = '' alors qu'en base la valeur
+    manquante est NULL. On accepte les deux :
+        norm(col) = norm('')   -> (col IS NULL OR col = '')
+        norm(col) <> norm('')  -> (col IS NOT NULL AND col <> '')"""
+    sql = re.sub(r"norm\(\s*((?:\w+\.)?\w+)\s*\)\s*=\s*norm\(''\)",
+                 r"(\1 IS NULL OR \1 = '')", sql, flags=re.I)
+    sql = re.sub(r"norm\(\s*((?:\w+\.)?\w+)\s*\)\s*(?:!=|<>)\s*norm\(''\)",
+                 r"(\1 IS NOT NULL AND \1 <> '')", sql, flags=re.I)
     return sql
+
+
+# =============================================================================
+#  Regle 5 : jointures seulement via les cles etrangeres
+# =============================================================================
+_SQL_WORDS = {"on", "where", "join", "left", "right", "inner", "outer", "cross", "full",
+              "group", "order", "limit", "using", "natural", "as", "union", "having", "select"}
+
+
+def _aliases(sql: str) -> Dict[str, str]:
+    """alias (et nom de table) -> nom de table, d'apres les FROM / JOIN de la requete."""
+    out: Dict[str, str] = {}
+    for m in re.finditer(r"\b(?:from|join)\s+\"?(\w+)\"?(?:\s+(?:as\s+)?(\w+))?",
+                         _mask_strings(sql), flags=re.I):
+        table, alias = m.group(1), m.group(2)
+        out[table.lower()] = table
+        if alias and alias.lower() not in _SQL_WORDS:
+            out[alias.lower()] = table
+    return out
+
+
+def fk_path(schema: DbSchema, start: str, goal: str, max_len: int = 4) -> List[Tuple[str, str]]:
+    """Plus court chemin de cles etrangeres entre deux tables :
+    liste de conditions de jointure ('a.x', 'b.y')."""
+    graph: Dict[str, List[Tuple[str, str, str]]] = {}
+    for t, c, rt, rc in schema.foreign_keys:
+        graph.setdefault(t.lower(), []).append((rt, f"{t}.{c}", f"{rt}.{rc}"))
+        graph.setdefault(rt.lower(), []).append((t, f"{rt}.{rc}", f"{t}.{c}"))
+    prev = {start.lower(): None}
+    queue = [start.lower()]
+    while queue:
+        node = queue.pop(0)
+        if node == goal.lower():
+            path = []
+            while prev[node] is not None:
+                parent, cond = prev[node]
+                path.append(cond)
+                node = parent
+            return path[::-1]
+        for nxt, a, b in graph.get(node, []):
+            if nxt.lower() not in prev:
+                prev[nxt.lower()] = (node, (a, b))
+                queue.append(nxt.lower())
+    return []
+
+
+def check_joins(sql: str, schema: DbSchema) -> List[str]:
+    """Renvoie les conditions a.x = b.y qui ne correspondent a aucune cle etrangere.
+    Acceptees : une cle etrangere (dans un sens ou l'autre), deux colonnes qui pointent
+    vers la meme cle (ex. e.ID_TIERS = d.ID_TIERS), ou deux colonnes de meme nom."""
+    if not schema.foreign_keys:
+        return []          # base sans cles etrangeres declarees : rien a verifier
+    alias = _aliases(sql)
+    target: Dict[str, str] = {}
+    fk_pairs = set()
+    for t, c, rt, rc in schema.foreign_keys:
+        a, b = f"{t}.{c}".lower(), f"{rt}.{rc}".lower()
+        fk_pairs |= {(a, b), (b, a)}
+        target[a] = b
+
+    def canon(col: str) -> str:
+        return target.get(col, col)
+
+    problems = []
+    for m in re.finditer(r"(?<![\w.])(\w+)\.(\w+)\s*=\s*(\w+)\.(\w+)(?![\w.(])",
+                         _mask_strings(sql)):
+        a1, c1, a2, c2 = m.groups()
+        t1, t2 = alias.get(a1.lower()), alias.get(a2.lower())
+        if not t1 or not t2 or t1.lower() == t2.lower():
+            continue
+        left, right = f"{t1}.{c1}".lower(), f"{t2}.{c2}".lower()
+        if ((left, right) in fk_pairs or canon(left) == canon(right)
+                or c1.lower() == c2.lower()):
+            continue
+        path = fk_path(schema, t1, t2)
+        hint = (" Chemin correct : " + ", ".join(f"{x} = {y}" for x, y in path) + "."
+                if path else "")
+        problems.append(f"La jointure {m.group(0)} ne passe par aucune clé étrangère "
+                        f"(règle 5).{hint}")
+    return problems
+
+
+# =============================================================================
+#  « Le plus / le moins » : ne pas cacher les egalites avec LIMIT 1
+# =============================================================================
+_SUPERLATIVE = re.compile(r"\b(le|la|les)\s+(plus|moins)\b|\bmaxim|\bminim|\bmeilleur|\bpire",
+                          re.I)
+_EXPLICIT_N = re.compile(r"\b(top|les|premiers?|premieres?)\s+\d+\b|\b\d+\s+(premiers?|"
+                         r"premieres?|meilleurs?)\b", re.I)
+
+
+def hides_ties(question: str, sql: str) -> bool:
+    """Vrai si la question demande « le plus / le moins » et que le SQL coupe avec
+    ORDER BY ... LIMIT 1 (une seule ligne, meme s'il y a des ex aequo)."""
+    q = norm(question)
+    if not _SUPERLATIVE.search(q) or _EXPLICIT_N.search(q):
+        return False
+    return bool(re.search(r"\border\s+by\b[^;]*\blimit\s+1\s*$", _mask_strings(sql), re.I))
 
 
 def find_unknown_values(sql: str, schema: DbSchema) -> List[Dict]:
@@ -411,6 +536,7 @@ def solve(question: str, model: str = None, db_path: Path = None,
     res["prompt_tokens_estimes"] = len(prompt) // 3
     messages = [{"role": "user", "content": prompt}]
     values_feedback_done = empty_feedback_done = False
+    joins_feedback_done = ties_feedback_done = False
 
     for attempt in range(MAX_RETRIES + 1):
         raw = llm(model, messages)
@@ -429,7 +555,7 @@ def solve(question: str, model: str = None, db_path: Path = None,
         if is_hors_base(sql):
             log_query(sql, "HORS_BASE")
             res.update(status="hors_base", sql=sql,
-                       answer="Cette information n'existe pas dans la base RisKover.")
+                       answer=f"Cette information n'existe pas dans la base {schema.db_id}.")
             return res
 
         ok, msg = validate_sql(sql)
@@ -438,8 +564,25 @@ def solve(question: str, model: str = None, db_path: Path = None,
             retry(f"Requête refusée : {msg} Corrige-la en respectant les règles.")
             continue
 
+        # Regle 6 : « le plus / le moins » avec LIMIT 1 cache les ex aequo (verifie AVANT
+        # d'ajouter le LIMIT de securite, pour ne voir que celui ecrit par le modele)
+        if not ties_feedback_done and hides_ties(question, sql):
+            ties_feedback_done = True
+            retry("ORDER BY ... LIMIT 1 cache les égalités (ex aequo). Renvoie toutes les "
+                  "lignes à égalité, par exemple avec HAVING / WHERE ... = (SELECT MAX(...) "
+                  "...) ou (SELECT MIN(...) ...), sans LIMIT 1.")
+            continue
+
         sql = enforce_limit(apply_norm(sql, schema.text_columns))
         res["sql"] = sql
+
+        # Regle 5 : jointures seulement via les cles etrangeres
+        bad_joins = check_joins(sql, schema)
+        if bad_joins and not joins_feedback_done:
+            joins_feedback_done = True
+            retry(" ".join(bad_joins) + " Corrige les jointures en suivant les "
+                  "【Foreign keys】 (ajoute les tables intermédiaires si besoin).")
+            continue
 
         unknown = find_unknown_values(sql, schema)
         if unknown:
@@ -472,8 +615,12 @@ def solve(question: str, model: str = None, db_path: Path = None,
         if not rows and not empty_feedback_done and attempt < MAX_RETRIES:
             # Un resultat vide peut etre juste, on laisse au modele une seule verification
             empty_feedback_done = True
-            retry("Le résultat est vide. Vérifie les tables, les jointures et les valeurs. "
-                  "Si la requête est correcte, renvoie-la identique.")
+            msg = ("Le résultat est vide. Vérifie les tables, les jointures et les valeurs. ")
+            if re.search(r"\b(max|min)\s*\(", sql, re.I) and re.search(r"\bgroup\s+by\b", sql, re.I):
+                msg += ("Attention : dans ta sous-requête MAX/MIN, le GROUP BY compte aussi le "
+                        "groupe où la clé est NULL ; ajoute WHERE <clé> IS NOT NULL dans la "
+                        "sous-requête. ")
+            retry(msg + "Si la requête est correcte, renvoie-la identique.")
             continue
         break
 
@@ -493,17 +640,18 @@ def solve(question: str, model: str = None, db_path: Path = None,
         log(f"    ... {n - SHOW_ROWS} autre(s) ligne(s) non affichee(s) (option --show)")
 
     if with_answer:
-        res["answer"] = write_answer(question, res, llm)
+        res["answer"] = write_answer(question, res, llm, db_name=schema.db_id)
     return res
 
 
-def write_answer(question: str, res: Dict, llm=None) -> str:
+def write_answer(question: str, res: Dict, llm=None, db_name: str = "") -> str:
     llm = llm or ask_llm
     return llm(ANSWER_MODEL, [
         {"role": "system", "content":
             "Réponds en français, clairement et brièvement. Utilise seulement le résultat "
             "fourni, n'invente aucun chiffre. Si le résultat est vide, dis que l'information "
-            "n'existe pas dans la base. Cite la source : « base SQL RisKover, table(s) … ». "
+            "n'existe pas dans la base. "
+            f"Cite la source : « base SQL {db_name or 'interrogée'}, table(s) … ». "
             "Ne propose jamais d'exécuter du SQL."},
         {"role": "user", "content":
             f"Question : {question}\nRequête : {res['sql']}\n"

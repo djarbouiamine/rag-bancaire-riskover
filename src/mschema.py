@@ -96,18 +96,31 @@ def _is_text(ctype: str) -> bool:
 
 
 def _is_identifier(table: str, col: str, pk: bool, fk_cols: Set[str]) -> bool:
+    """Colonne identifiant (pas d'Examples) : cle primaire ou nom du type
+    client_id, ID_TIERS, id, CustomerId, no_compte..."""
     c = col.lower()
-    return (pk or c.endswith("_id") or c.startswith("id_") or c.startswith("no_")
+    return (pk or c == "id" or c.endswith("_id") or c.startswith("id_") or c.startswith("no_")
+            or (len(col) > 2 and col.endswith("Id") and col[-3].islower())   # CustomerId
             or c in ("nom_fichier", "lb_fichier"))
 
 
+def _is_date(col: str) -> bool:
+    c = col.lower()
+    return "date" in c or c.startswith("dt_")
+
+
 def _load_docs(db_path: Path):
-    """Dictionnaire de donnees : <base>.docs.json s'il existe, sinon celui de riskover."""
+    """Dictionnaire de donnees (descriptions des tables / colonnes), optionnel :
+    1. <base>.docs.json a cote de la base, s'il existe ;
+    2. sinon, pour riskover.db uniquement, les descriptions ecrites dans ce fichier ;
+    3. sinon aucune description : le modele se base sur les noms des tables et colonnes."""
     p = db_path.with_suffix(".docs.json")
     if p.exists():
         data = json.loads(p.read_text(encoding="utf-8"))
         return data.get("tables", {}), data.get("columns", {})
-    return TABLE_DOCS, COLUMN_DOCS
+    if db_path.stem == "riskover":
+        return TABLE_DOCS, COLUMN_DOCS
+    return {}, {}
 
 
 class DbSchema:
@@ -148,11 +161,17 @@ class DbSchema:
                 cols = []
                 for c in con.execute(f'PRAGMA table_info("{t}")').fetchall():
                     name, ctype, pk = c[1], c[2], bool(c[5])
+                    if not ctype:
+                        # SQLite accepte des colonnes sans type : on regarde les donnees
+                        row = con.execute(f'SELECT typeof("{name}") FROM "{t}" '
+                                          f'WHERE "{name}" IS NOT NULL LIMIT 1').fetchone()
+                        ctype = {"text": "TEXT", "integer": "INTEGER",
+                                 "real": "REAL"}.get(row[0] if row else "", "TEXT")
                     cols.append((name, ctype, pk))
                     if not _is_text(ctype):
                         continue
                     self.text_columns.add(name.lower())
-                    if _is_identifier(t, name, pk, fk_cols) or "date" in name:
+                    if _is_identifier(t, name, pk, fk_cols) or _is_date(name):
                         continue
                     vals = con.execute(
                         f'SELECT DISTINCT "{name}" FROM "{t}" WHERE "{name}" IS NOT NULL '

@@ -9,14 +9,11 @@ import os
 # Chemins de base du projet
 BASE_DIR = Path(__file__).resolve().parent
 
-# Bases de test (donnees fictives)
+# Base de test RisKover (7 tables, donnees fictives) : python src/create_riskover_db.py
+# N'importe quelle autre base SQLite peut etre interrogee avec --db chemin/vers/base.db
+# (ou $env:RISKOVER_DB_PATH).
 DB_DIR = BASE_DIR / "db"
-SMALL_DB_PATH = DB_DIR / "riskover.db"        # 7 tables     (python src/create_riskover_db.py)
-LARGE_DB_PATH = DB_DIR / "banque_large.db"    # 100 tables   (python src/create_large_db.py)
-
-# Base utilisee par defaut par text2sql.py et bench_text2sql.py : la GRANDE base.
-# Pour revenir a la petite : $env:RISKOVER_DB_PATH = "db/riskover.db"  (ou --db db/riskover.db)
-RISKOVER_DB_PATH = Path(os.getenv("RISKOVER_DB_PATH", LARGE_DB_PATH))
+RISKOVER_DB_PATH = Path(os.getenv("RISKOVER_DB_PATH", DB_DIR / "riskover.db"))
 
 # Limites de lignes (modifiables aussi avec --limit et --show)
 MAX_ROWS = int(os.getenv("MAX_ROWS", "200"))      # lignes max renvoyees par la base (LIMIT)
@@ -28,9 +25,7 @@ LOGS_DIR = BASE_DIR / "logs"
 QUERY_LOG_PATH = LOGS_DIR / "queries.log"
 
 # Dossiers de données
-DATA_DIR = BASE_DIR / "data"
-DATA_RAW = DATA_DIR / "raw"
-DATA_CLEAN = DATA_DIR / "clean"
+DATA_DIR = BASE_DIR / "data"          # data/cache : vecteurs bge-m3 (recalcules si absents)
 
 # Serveur Ollama SUP'COM via tunnel SSH :
 #   ssh -N -L 11435:127.0.0.1:11434 <utilisateur>@<adresse-serveur>
@@ -48,6 +43,11 @@ SQL_MODEL = os.getenv("SQL_MODEL", "qwen2.5-coder:14b")
 # Modele d'embeddings (schema linking des grandes bases, puis RAG)
 EMBED_MODEL = os.getenv("EMBED_MODEL", "bge-m3")
 
-# Schema linking : au-dela de ce nombre de tables, on n'envoie au modele que les tables utiles
-LINKING_MIN_TABLES = int(os.getenv("LINKING_MIN_TABLES", "20"))
+# Schema linking (bge-m3) : le modele ne recoit que les tables utiles + les valeurs trouvees
+# dans la question. Active des que la base a au moins LINKING_MIN_TABLES tables.
+#   1  -> TOUJOURS active (choix du projet, teste le 11/11/2026 sur riskover.db :
+#         24/25 et 12/15 comme sans linking, tables utiles toujours gardees, +0.5 s/question)
+#   20 -> seulement pour les grandes bases
+# Desactiver ponctuellement : --linking off
+LINKING_MIN_TABLES = int(os.getenv("LINKING_MIN_TABLES", "1"))
 

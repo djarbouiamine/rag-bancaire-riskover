@@ -1,4 +1,1 @@
-smolagents
-sqlalchemy
 requests
-

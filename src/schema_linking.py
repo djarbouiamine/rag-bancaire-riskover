@@ -23,7 +23,8 @@ Solution en 2 outils, executes AVANT d'appeler le modele SQL :
    - Les valeurs trouvees sont donnees au modele, et leurs tables sont ajoutees.
 
 Usage direct (depuis rag_bancaire) :
-    python src/schema_linking.py --db db/banque_large.db "credits en contentieux a sfax medina"
+    python src/schema_linking.py "credits en contentieu a kairouan"
+    python src/schema_linking.py --db autre_base.db "ma question"
 """
 import difflib
 import hashlib
@@ -300,7 +301,7 @@ if __name__ == "__main__":
 
     p = argparse.ArgumentParser()
     p.add_argument("question")
-    p.add_argument("--db", default=str(config.DB_DIR / "banque_large.db"))
+    p.add_argument("--db", default=str(config.RISKOVER_DB_PATH))
     args = p.parse_args()
     schema = DbSchema(args.db)
     emb = Embedder(config.OLLAMA_URL, config.EMBED_MODEL,

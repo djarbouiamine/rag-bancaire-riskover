@@ -48,7 +48,10 @@ class Text2SqlTest(unittest.TestCase):
 
     def solve(self, responses, question="q"):
         llm, calls = fake_llm(responses)
-        res = t2s.solve(question, model="fake", db_path=self.db, with_answer=False, llm=llm)
+        # linking=False : ces tests verifient le moteur SQL sans serveur (le schema linking a
+        # ses propres tests hors ligne dans test_schema_linking.py)
+        res = t2s.solve(question, model="fake", db_path=self.db, with_answer=False, llm=llm,
+                        linking=False)
         return res, calls
 
     # --- norm() ---------------------------------------------------------------
@@ -164,6 +167,62 @@ class Text2SqlTest(unittest.TestCase):
     def test_all_fail(self):
         res, _ = self.solve(["DROP TABLE clients"])
         self.assertEqual(res["status"], "echec")
+
+    # --- regle 5 : jointures via les cles etrangeres --------------------------
+    def test_check_joins_detects_invented_join(self):
+        bad = ("SELECT DISTINCT c.client_id FROM clients AS c JOIN incidents_paiement AS i "
+               "ON i.credit_id = c.client_id")
+        problems = t2s.check_joins(bad, self.schema)
+        self.assertEqual(len(problems), 1)
+        # le message donne le bon chemin : clients -> credits -> incidents_paiement
+        self.assertIn("credits.client_id", problems[0])
+        self.assertIn("incidents_paiement.credit_id", problems[0])
+
+    def test_check_joins_accepts_fk_joins(self):
+        good = ("SELECT DISTINCT c.client_id FROM clients c JOIN credits cr "
+                "ON cr.client_id = c.client_id JOIN incidents_paiement i "
+                "ON i.credit_id = cr.credit_id WHERE c.ville = 'x'")
+        self.assertEqual(t2s.check_joins(good, self.schema), [])
+
+    def test_bad_join_is_corrected(self):
+        res, calls = self.solve([
+            "SELECT DISTINCT c.client_id FROM clients AS c JOIN incidents_paiement AS i "
+            "ON i.credit_id = c.client_id",
+            "SELECT DISTINCT c.client_id FROM clients c JOIN credits cr ON cr.client_id = "
+            "c.client_id JOIN incidents_paiement i ON i.credit_id = cr.credit_id"])
+        self.assertEqual(res["status"], "ok")
+        self.assertIn("clé étrangère", calls[1][-1]["content"])
+        self.assertGreater(len(res["rows"]), 0)
+
+    # --- « aucun » -> IS NULL ----------------------------------------------------
+    def test_empty_value_becomes_is_null(self):
+        out = t2s.apply_norm("SELECT d.doc_id FROM documents d WHERE d.client_id = ''",
+                             self.schema.text_columns)
+        self.assertIn("(d.client_id IS NULL OR d.client_id = '')", out)
+        res, _ = self.solve(["SELECT d.doc_id FROM documents d WHERE norm(d.client_id) = norm('')"])
+        self.assertEqual(res["status"], "ok")
+        self.assertEqual(len(res["rows"]), 5)   # les 5 documents non lies
+
+    # --- « le plus » : pas de LIMIT 1 ------------------------------------------
+    def test_hides_ties(self):
+        sql = "SELECT c.client_id FROM clients c ORDER BY c.date_entree DESC LIMIT 1"
+        self.assertTrue(t2s.hides_ties("Quel client a le plus de documents ?", sql))
+        self.assertFalse(t2s.hides_ties("Les 3 clients les plus anciens", sql))
+        self.assertFalse(t2s.hides_ties("Liste des clients", sql))
+        self.assertFalse(t2s.hides_ties("Quel client a le plus de documents ?",
+                                        "SELECT c.client_id FROM clients c"))
+
+    def test_tie_question_is_corrected(self):
+        res, calls = self.solve([
+            "SELECT d.client_id FROM documents d GROUP BY d.client_id "
+            "ORDER BY COUNT(*) DESC LIMIT 1",
+            "SELECT d.client_id FROM documents d WHERE d.client_id IS NOT NULL "
+            "GROUP BY d.client_id HAVING COUNT(*) = (SELECT MAX(n) FROM (SELECT COUNT(*) n "
+            "FROM documents x WHERE x.client_id IS NOT NULL GROUP BY x.client_id))"],
+            question="Quel client a le plus de documents ?")
+        self.assertEqual(res["status"], "ok")
+        self.assertIn("égalités", calls[1][-1]["content"])
+        self.assertEqual(len(res["rows"]), 2)   # CLI_034 et CLI_059 ex aequo
 
     def test_mschema_has_fk_and_examples(self):
         ms = self.schema.to_mschema()
